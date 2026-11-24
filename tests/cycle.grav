@@ -1,0 +1,15 @@
+// apogee-package: packages that wait for each other are refused.
+import "std"
+import "apogee-container"
+import "apogee-config"
+import "../src/all.grav"
+use apogee.*
+
+class LoopA extends ApogeePackage { constructor() {}  fn name() -> string { return "loop-a" }  fn after() -> Array<string> { return ["loop-b"] } }
+class LoopB extends ApogeePackage { constructor() {}  fn name() -> string { return "loop-b" }  fn after() -> Array<string> { return ["loop-a"] } }
+
+test "a cycle is refused" {
+    let msg = ""
+    try { Packages.ordered([new LoopA() as ApogeePackage, new LoopB()]) } catch (e: StateError) { msg = e.message() }
+    assert(Str.startsWith(msg, "packages wait for each other"))
+}

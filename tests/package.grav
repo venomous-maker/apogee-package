@@ -1,0 +1,44 @@
+// apogee-package's tests: packages are found by reflection, ordered by
+// after() (and a cycle refused), and their defaults fill only what is missing.
+import "std"
+import "apogee-container"
+import "apogee-config"
+import "../src/all.grav"
+use apogee.*
+
+class Log { static lines: Array<string> = new Array<string>() }
+
+class AlphaPackage extends ApogeePackage {
+    constructor() {}
+    fn name() -> string { return "alpha" }
+    fn after() -> Array<string> { return ["zeta"] }
+    fn defaults() -> HashMap<string, any> { return {"alpha.size": 3, "alpha.mode": "fast"} }
+    fn boot(app: PackageContext) { Log.lines.push("alpha booted in " + app.environment) }
+}
+class ZetaPackage extends ApogeePackage {
+    constructor() {}
+    fn name() -> string { return "zeta" }
+    fn migrations() -> Array<any> { return ["a migration" as any] }
+}
+class MidPackage extends ApogeePackage {
+    constructor() {}
+    fn name() -> string { return "mid" }
+}
+
+test "found, ordered, and their defaults" {
+    let ps = Packages.discover()
+    let names = new Array<string>()
+    for (p in ps) { names.push(p.name()) }
+    assertEq(Str.join(names, ","), "zeta,alpha,mid")              // zeta first: alpha waits for it
+    Config.set("alpha.mode", "careful")
+    Packages.applyDefaults(ps)
+    assertEq(Config.getInt("alpha.size", 0), 3 as long)
+    assertEq(Config.getString("alpha.mode", ""), "careful")        // the app's own value stays
+    let ctx = new PackageContext(new Container(), "testing", "key")
+    for (p in ps) { p.register(ctx); p.boot(ctx) }
+    assertEq(Str.join(Log.lines, ";"), "alpha booted in testing")
+    assertEq(ps[0].migrations().size(), 1)
+    assert(ps[0].enabled())
+    Config.set("zeta.enabled", false)
+    assert(!ps[0].enabled())
+}
