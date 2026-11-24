@@ -1,0 +1,2 @@
+// all.grav — apogee-package: how modules connect themselves to an app.
+import "package.grav"

@@ -1,0 +1,101 @@
+// package.grav — how an Apogee module connects itself to an app. A module
+// declares one class extending ApogeePackage; importing the module is then
+// enough: the app finds the class (by reflection), applies its default
+// settings, registers and boots it, runs its migrations with `migrate`, and
+// adds its commands to the console.
+//
+//   class SanctumPackage extends ApogeePackage {
+//       constructor() {}
+//       fn name() -> string { return "sanctum" }
+//       fn defaults() -> HashMap<string, any> { return {"sanctum.expiration": Env.getInt("SANCTUM_EXPIRATION", 0)} }
+//       fn migrations() -> Array<any> { return [new CreatePersonalAccessTokensTable() as any] }
+//       fn boot(app: PackageContext) {
+//           let router = app.make::<Router>()
+//           router.aliasMiddleware("abilities", ...)
+//       }
+//   }
+//
+// The contract lives here, below the framework, so a module needs only this
+// (and apogee-container and apogee-config) to describe itself.
+import "std"
+import "apogee-container"
+import "apogee-config"
+
+namespace apogee {
+
+    @Package abstract class ApogeePackage {
+        // The package's short name ("sanctum"): its settings live under it.
+        abstract fn name() -> string
+        // Settings to use when the app's configuration leaves them out (path -> value).
+        fn defaults() -> HashMap<string, any> { return new HashMap<string, any>(); }
+        // Packages (by name) that must register and boot before this one.
+        fn after() -> Array<string> { return new Array<string>(); }
+        // Bindings only (other packages may not be registered yet).
+        fn register(app: PackageContext) {}
+        // Everything else: routes, middleware, listeners, schedules.
+        fn boot(app: PackageContext) {}
+        // Migrations (grav-orbit Migration objects) run by `migrate`.
+        fn migrations() -> Array<any> { return new Array<any>(); }
+        // Console commands (apogee-console ConsoleCommand objects).
+        fn commands() -> Array<any> { return new Array<any>(); }
+        // Whether the package is on (its own setting, "<name>.enabled", true by default).
+        fn enabled() -> bool { return Config.getBool(self.name() + ".enabled", true); }
+    }
+
+    // What a package sees of the app.
+    class PackageContext {
+        public container: Container
+        // "local", "production", "testing", ...
+        public environment: string
+        // The app's key (for signing and encryption).
+        public key: string
+        constructor(container: Container, environment: string, key: string) { self.container = container; self.environment = environment; self.key = key; }
+        fn make<T>() -> T { return self.container.make::<T>(); }
+        fn config(path: string, fallback: any = null) -> any { return Config.get(path, fallback); }
+        fn isLocal() -> bool { return self.environment == "local"; }
+        fn isProduction() -> bool { return self.environment == "production"; }
+        fn isTesting() -> bool { return self.environment == "testing"; }
+    }
+
+    class Packages {
+        // Every package the program holds (each class extending ApogeePackage),
+        // made once, in an order that respects after(); names alike: alphabetical.
+        static fn discover() -> Array<ApogeePackage> {
+            let found = new Array<ApogeePackage>();
+            for (cls in ClassInfo.all(reflect(ApogeePackage))) {
+                if (!cls.canCreate()) { continue; }
+                found.push(cls.create() as ApogeePackage);
+            }
+            found.sortBy(fn(a: ApogeePackage, b: ApogeePackage) -> int { return Str.compare(a.name(), b.name()); });
+            return Packages.ordered(found);
+        }
+        // `list` with each package after the ones it names in after() (a cycle is a StateError).
+        static fn ordered(list: Array<ApogeePackage>) -> Array<ApogeePackage> {
+            let byName = new HashMap<string, ApogeePackage>();
+            for (p in list) { byName.put(p.name(), p); }
+            let out = new Array<ApogeePackage>();
+            let done = new HashSet<string>();
+            let visiting = new HashSet<string>();
+            for (p in list) { Packages.visit(p, byName, done, visiting, out); }
+            return out;
+        }
+        private static fn visit(p: ApogeePackage, byName: HashMap<string, ApogeePackage>, done: HashSet<string>,
+                                visiting: HashSet<string>, out: Array<ApogeePackage>) {
+            let n = p.name();
+            if (done.contains(n)) { return; }
+            if (visiting.contains(n)) { throw new StateError("packages wait for each other: " + n); }
+            visiting.add(n);
+            for (dep in p.after()) {
+                let d = byName.getOr(dep, null);
+                if (d != null) { Packages.visit(d, byName, done, visiting, out); }
+            }
+            visiting.remove(n);
+            done.add(n);
+            out.push(p);
+        }
+        // Applies each package's defaults where the configuration has no value.
+        static fn applyDefaults(list: Array<ApogeePackage>) {
+            for (p in list) { for ((k, v) in p.defaults()) { if (!Config.has(k)) { Config.set(k, v); } } }
+        }
+    }
+}
