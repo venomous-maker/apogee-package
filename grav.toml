@@ -1,6 +1,6 @@
 name = "apogee-package"
 lib = "src/all.grav"
-grav = ">=1.11.0"
+grav = ">=1.12.0"
 paths = ["src"]
 
 [dependencies]
