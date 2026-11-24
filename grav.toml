@@ -1,0 +1,8 @@
+name = "apogee-package"
+lib = "src/all.grav"
+grav = ">=1.11.0"
+paths = ["src"]
+
+[dependencies]
+apogee-container = "github.com/venomous-maker/apogee-container@v0.2.0"
+apogee-config = "github.com/venomous-maker/apogee-config@v0.2.0"
