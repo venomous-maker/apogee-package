@@ -7,7 +7,7 @@ reflection, applies its default settings, registers and boots it, runs its
 migrations with `migrate`, and adds its commands to the console. Nothing is
 listed by hand.
 
-```grav
+```typescript
 import "std"
 import "apogee-package"
 use apogee.*
