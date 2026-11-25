@@ -6,6 +6,8 @@ compiler versions it builds with.
 
 ## Unreleased
 
+## 0.1.0 (2026-11-25)
+
 - `ApogeePackage` (name, defaults, after, register, boot, migrations,
   commands, enabled), `PackageContext`, and `Packages.discover` (by
   reflection, ordered by after()).
