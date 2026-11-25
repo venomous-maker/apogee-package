@@ -20,6 +20,11 @@
 import "std"
 import "apogee-container"
 import "apogee-config"
+import "apogee-http"
+import "apogee-routing"
+import "apogee-auth"
+import "grav-db"
+use db.*
 
 namespace apogee {
 
@@ -49,7 +54,43 @@ namespace apogee {
         public environment: string
         // The app's key (for signing and encryption).
         public key: string
+        // The pool a package's own tables are written through (the framework
+        // sets it: on SQLite Orbit's connection, so writes join a transaction
+        // this thread has open; elsewhere the app's pool).
+        public poolFn: fn() -> Pool = null
         constructor(container: Container, environment: string, key: string) { self.container = container; self.environment = environment; self.key = key; }
+        fn storePool() -> Pool {
+            if (self.poolFn == null) { return self.container.make::<Pool>(); }
+            let f = self.poolFn;
+            return f();
+        }
+        // Who may open a package's dashboard: locally anyone on this machine;
+        // elsewhere a signed-in user the gate allows `ability` (define it).
+        fn dashboardGate(ability: string) -> fn(Request) -> bool {
+            let local = self.isLocal();
+            let c = self.container;
+            return fn(req: Request) -> bool {
+                if (local) {
+                    let r = req.http.remote;
+                    return Str.startsWith(r, "127.") || Str.startsWith(r, "[::1]") || Str.startsWith(r, "::1") || r == "";
+                }
+                let g = c.make::<Gate>();
+                return req.user != null && g.has(ability) && g.allows(req.user, ability);
+            };
+        }
+        // A dashboard's routes: with the session (so the gate knows who is
+        // signed in) and only same-origin requests changing anything.
+        fn dashboardRoutes(add: fn(Router)) {
+            let r = self.make::<Router>();
+            r.aliasInstance("same-origin", new SameOriginOnly());
+            r.middleware(["session", "same-origin"]).group(fn(g: Router) { add(g); });
+        }
+        // "a, b,,c" -> ["a", "b", "c"]
+        static fn list(s: string) -> Array<string> {
+            let out = new Array<string>();
+            for (x in Str.split(s, ",")) { if (Str.trim(x) != "") { out.push(Str.trim(x)); } }
+            return out;
+        }
         fn make<T>() -> T { return self.container.make::<T>(); }
         fn config(path: string, fallback: any = null) -> any { return Config.get(path, fallback); }
         fn isLocal() -> bool { return self.environment == "local"; }
@@ -57,7 +98,39 @@ namespace apogee {
         fn isTesting() -> bool { return self.environment == "testing"; }
     }
 
+    // Refuses a request that changes something (not GET, HEAD or OPTIONS) when
+    // its Origin, or else its Referer, names another site: a browser sends one
+    // of them with every cross-site POST, so no other page can press a
+    // dashboard's buttons for a signed-in admin. (Without either it is not a
+    // browser, so not a forgery.)
+    class SameOriginOnly implements Middleware {
+        constructor() {}
+        fn handle(req: Request, next: fn(Request) -> Response) -> Response {
+            let m = req.method();
+            if (m == "GET" || m == "HEAD" || m == "OPTIONS") { return next(req); }
+            let from = req.header("Origin");
+            if (from == "" || from == "null") { from = req.header("Referer"); }
+            if (from != "" && SameOriginOnly.hostOf(from) != Str.lower(req.httpHost())) {
+                return Response.json({"message": "Cross-site request refused."}, 403);
+            }
+            return next(req);
+        }
+        // "https://Example.com:8443/x" -> "example.com:8443"
+        static fn hostOf(url: string) -> string {
+            let s = url;
+            let scheme = Str.indexOf(s, "://");
+            if (scheme >= 0) { s = s[scheme + 3..]; }
+            let slash = Str.indexOf(s, "/");
+            if (slash >= 0) { s = s[..slash]; }
+            return Str.lower(s);
+        }
+    }
+
     class Packages {
+        // The app's folder (set by the framework before defaults are read).
+        static basePath: string = "."
+        // A path in the app's folder ("storage/app" -> "/srv/app/storage/app").
+        static fn path(rel: string) -> string { return Packages.basePath + "/" + rel; }
         // Every package the program holds (each class extending ApogeePackage),
         // made once, in an order that respects after(); names alike: alphabetical.
         static fn discover() -> Array<ApogeePackage> {
